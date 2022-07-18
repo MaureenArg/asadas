@@ -1,0 +1,260 @@
+---
+title: "Asadas según clúster"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+runtime: shiny    
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+```
+
+```{r paquetes, warning=FALSE, message=FALSE}
+library(dplyr)
+library(sf)
+library(terra)
+library(raster)
+library(rgdal)
+library(DT)
+library(plotly)
+library(leaflet)
+library(leafem)
+library(leaflet.extras)
+library(shiny)
+```
+
+```{r datos, warning=FALSE, message=FALSE}
+
+# capa vectorial (GeoJSON) de provincias de Costa Rica
+provincias <-
+  st_read(
+    "https://github.com/tpb728O-programaciongeoespacialr/2021ii/raw/main/datos/ign/delimitacion-territorial-administrativa/provincias-simplificadas_100m.geojson",
+    quiet = TRUE
+  )
+# Transformación del CRS  provincias
+provincias <-
+  provincias %>%
+  st_transform (4326)
+
+# capa cuencas
+cuencas <-
+  st_read(
+    "https://raw.githubusercontent.com/MaureenArg/datostarea/master/cuencas.geojson",
+    quiet = TRUE
+  )
+
+
+```
+
+```{r warning=FALSE, message=FALSE}
+# archivo CSV con registros de asadas
+asadas <-
+  st_read(
+    "/vsicurl/https://raw.githubusercontent.com/MaureenArg/datostarea/master/asadas2.csv",
+    options = c(
+      "X_POSSIBLE_NAMES=X",
+      "Y_POSSIBLE_NAMES=Y"
+    ),
+    quiet = TRUE
+  )
+
+# Asignación de un CRS a capa denuncias
+st_crs (asadas) <- 5367
+
+# Transformación del CRS  
+asadas <-
+  asadas %>%
+  st_transform (4326)
+
+```
+
+
+```{r warning=FALSE, message=FALSE}
+# Lista ordenada de asadas + "Todas"
+lista_asadas <- unique(asadas$cluster)
+lista_asadas <- sort(lista_asadas)
+lista_asadas <- c("Todas", lista_asadas)
+
+# Lista ordenada de instituciones + "Todas"
+lista_institucion <- unique(asadas$institucion)
+lista_institucion <- sort(lista_institucion)
+lista_institucion <- c("Todas", lista_institucion)
+
+
+# Lista ordenada de instituciones + "Todas"
+lista_cuencas <- unique(cuencas$NOMBRE)
+lista_cuencas <- sort(lista_cuencas)
+lista_cuencas <- c("Todas", lista_cuencas)
+
+
+```
+
+
+
+Column {.sidebar}
+-----------------------------------------------------------------------
+
+```{r filtros}
+selectInput(
+  inputId = "cluster",
+  label = "Cluster",
+  choices = lista_asadas,
+  selected = "Todas"
+)
+
+selectInput(
+  inputId = "institucion",
+  label = "Institución",
+  choices = lista_institucion,
+  selected = "Todas"
+)
+
+selectInput(
+  inputId = "cuencas",
+  label = "Cuenca",
+  choices = lista_cuencas,
+  selected = "Todas"
+)
+
+
+filtrarRegistros <- reactive({
+  # Remoción de geometrías y selección de columnas
+  asadas_filtrado <-
+    asadas %>%
+    dplyr::select(nombre, cluster, institucion)
+  
+  # Filtrado de denuncias por tipo
+  if (input$asadas != "Todas") {
+    asadas_filtrado <-
+      asadas_filtrado %>%
+      filter(cluster == input$asadas)
+  }
+  
+  # Filtrado de denuncias por institucion
+  if (input$institucion != "Todas") {
+    institucion_filtrado <-
+      asadas_filtrado %>%
+      filter(institucion == input$asadas)
+  }
+  
+ # Filtrado de denuncias por cuenca
+  if (input$cuencas != "Todas") {
+    cuencas_filtrado <-
+      cuencas_filtrado %>%
+      filter(NOMBRE == input$cuencas)
+  }
+  
+  return (asadas_filtrado)
+})
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Mapa de distribución de asadas
+
+```{r mapa, warning=FALSE}
+renderLeaflet({
+  registros <-
+    filtrarRegistros()
+  
+  # Mapa Leaflet con capas de provincias y denuncias
+  leaflet() %>%
+    setView(lng = -84.19452,
+            lat = 9.572735,
+            zoom = 7) %>%
+    addTiles(group = "OSM") %>%
+    addProviderTiles("Esri", group = "Esri") %>%
+    
+    addPolygons(
+      data = provincias,
+      color = "red",
+      fillColor = "transparent",
+      stroke = TRUE,  
+      weight = 1.0,
+    ) %>%
+    addCircleMarkers(
+      data = registros, 
+      stroke = TRUE,
+      radius = 4,
+      fillColor = 'red',
+      fillOpacity = 1,
+      label = paste0(
+        registros$asadas,
+        ", ",
+        registros$provincia
+        
+      ),
+      popup = paste0(
+        "<strong>Cluster: </strong>",
+        "<em>",
+        "<br>",
+        registros$cluster,
+        "</em>",
+        "<br>",
+         "<strong> Nombre: </strong>",
+        "<em>",
+        "<br>",
+        registros$nombre,
+        "</em>",
+        "<br>",
+        "<strong>Institución: </strong>",
+        registros$institucion,
+        "<br>"
+        
+      )
+    ) %>%
+    addSearchOSM() %>%
+    addResetMapButton() %>%
+    addMouseCoordinates () %>%
+    addLayersControl(baseGroups = c ("OSM", "Esri"))
+}) 
+```
+
+
+### Asadas según clúster
+
+```{r tabla}
+
+renderPlotly({
+  registros <- filtrarRegistros()
+  
+  # Gráfico de asadas
+  registros %>%
+    st_drop_geometry() %>%
+    dplyr::group_by(cluster) %>%
+    summarize(suma_registros = n()) %>%
+    filter(!is.na(cluster))  %>%
+    plot_ly(
+      x = ~ cluster,
+      y = ~ suma_registros,
+      type = "bar",
+      mode = "markers",
+      fill = "tozeroy",
+      color = I ("blue")
+    ) %>%
+    layout(title = "Cantidad de asadas por cluster", xaxis = list(title = "Cluster"),
+           yaxis = list(title = "Cantidad de asadas"))
+})
+
+
+
+
+
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Cantidad de asadas por clúster
+
+```{r grafico}
+renderDT({
+  registros <- filtrarRegistros()
+  
+  registros %>%
+    st_drop_geometry() %>%
+    datatable(rownames= FALSE, filter= "top", class= "hover cell-border stripe", caption= "Tabla 1: Asadas según cluster", colnames = c( "cluster", "nombre", "institucion"), extensions = "Buttons", options = list (language = list (url = "//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json"),pageLength = 4, dom = "Bfrtip", buttons = c("csv", "excel", "pdf")))
+})
+```
